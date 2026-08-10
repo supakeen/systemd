@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 
+#include <sys/mount.h>
 #include <unistd.h>
 
 #include "sd-bus.h"
@@ -44,11 +45,13 @@
 #include "stdio-util.h"
 #include "string-util.h"
 #include "strv.h"
+#include "tmpfile-util.h"
 #include "sysupdate.h"
 #include "sysupdate-cleanup.h"
 #include "sysupdate-config.h"
 #include "sysupdate-feature.h"
 #include "sysupdate-instance.h"
+#include "sysupdate-resource.h"
 #include "sysupdate-target.h"
 #include "sysupdate-transfer.h"
 #include "sysupdate-update-set.h"
@@ -1748,6 +1751,78 @@ static int notify_subscribers_reply(
         return 0;
 }
 
+static int context_load_target_os_release(Context *c) {
+        int r;
+
+        assert(c);
+
+        /* Try to read os-release from the installed base target and compare it against the host.
+         * Only stores the result if the target's os-release actually differs from the host's. */
+
+        _cleanup_strv_free_ char **target_pairs = NULL;
+
+        FOREACH_ARRAY(tr, c->transfers, c->n_transfers) {
+                Transfer *t = *tr;
+
+                /* Directory/subvolume targets have a filesystem we can read directly */
+                if (IN_SET(t->target.type, RESOURCE_DIRECTORY, RESOURCE_SUBVOLUME) && t->final_path) {
+                        r = load_os_release_pairs(t->final_path, &target_pairs);
+                        if (r >= 0 && !strv_isempty(target_pairs))
+                                goto compare;
+                        target_pairs = strv_free(target_pairs);
+                }
+        }
+
+        FOREACH_ARRAY(tr, c->transfers, c->n_transfers) {
+                Transfer *t = *tr;
+
+                /* For partition targets, try a temporary mount */
+                if (t->target.type != RESOURCE_PARTITION || !t->partition_info.device)
+                        continue;
+
+                _cleanup_(umount_and_rmdir_and_freep) char *mounted = NULL;
+                r = mkdtemp_malloc("/tmp/sysupdate-target-XXXXXX", &mounted);
+                if (r < 0)
+                        continue;
+
+                r = mount_nofollow_verbose(LOG_DEBUG, t->partition_info.device, mounted, /* fstype= */ NULL, MS_RDONLY|MS_NOEXEC, /* options= */ NULL);
+                if (r < 0)
+                        continue;
+
+                r = load_os_release_pairs(mounted, &target_pairs);
+                if (r >= 0 && !strv_isempty(target_pairs))
+                        goto compare;
+                target_pairs = strv_free(target_pairs);
+        }
+
+        return log_debug_errno(SYNTHETIC_ERRNO(ENODATA), "Could not read os-release from any installed base target.");
+
+compare:;
+        _cleanup_strv_free_ char **host_pairs = NULL;
+        r = load_os_release_pairs(c->root, &host_pairs);
+        if (r < 0)
+                return log_debug_errno(r, "Failed to load host os-release for comparison: %m");
+
+        if (strv_equal(host_pairs, target_pairs)) {
+                log_debug("Target os-release is identical to host, not overriding specifiers.");
+                return 0;
+        }
+
+        c->target_os_release = TAKE_PTR(target_pairs);
+        log_debug("Target os-release differs from host, will use it for ResolveFromTarget= transfers.");
+        return 1;
+}
+
+static bool context_has_resolve_from_target(const Context *c) {
+        assert(c);
+
+        FOREACH_ARRAY(tr, c->transfers, c->n_transfers)
+                if ((*tr)->resolve_from_target)
+                        return true;
+
+        return false;
+}
+
 static int context_notify_subscribers(Context *c, UpdateSet *us) {
         int r;
 
@@ -1852,7 +1927,7 @@ static int context_install(
 
         log_info("%s Successfully installed update '%s'.", glyph(GLYPH_SPARKLES), us->version);
 
-        if (!c->root)
+        if (!c->root && !context_has_resolve_from_target(c))
                 (void) context_notify_subscribers(c, us);
 
         (void) sd_notifyf(/* unset_environment= */ false,
@@ -2647,7 +2722,7 @@ static int context_update(
                         int f = secure_getenv_bool("SYSTEMD_SYSUPDATE_FORCE_NOTIFY");
                         if (f < 0 && f != -ENXIO)
                                 log_debug_errno(f, "Failed to parse $SYSTEMD_SYSUPDATE_FORCE_NOTIFY, ignoring: %m");
-                        if (f > 0)
+                        if (f > 0 && !context_has_resolve_from_target(c))
                                 (void) context_notify_subscribers(c, /* us= */ NULL);
                 }
         }
@@ -2729,6 +2804,10 @@ static int verb_update_impl(int argc, char **argv, UpdateActionFlags action_flag
                 r = context_update(&context, version, booted_version, action_flags);
                 if (r != -ENOENT)
                         RET_GATHER(ret, r);
+
+                /* After the base update, read the target's os-release so that component
+                 * transfers with ResolveFromTarget=yes resolve specifiers from it. */
+                (void) context_load_target_os_release(&context);
 
                 _cleanup_strv_free_ char **component_names = NULL;
                 r = context_list_components(&context, &component_names, /* ret_has_default_component= */ NULL);

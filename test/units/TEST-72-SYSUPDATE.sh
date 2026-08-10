@@ -1966,4 +1966,85 @@ test ! -e "$CF/target-compy/compy-v3.bin"
 compfeat_cleanup
 restore_machine_info
 
+# ---------------------------------------------------------------------------
+# ResolveFromTarget=yes: component specifiers resolve from the installed base
+# ---------------------------------------------------------------------------
+# When --component-all updates the base first, component transfers with
+# ResolveFromTarget=yes should resolve os-release specifiers (like %A) from
+# the newly installed base, not the running system. This lets sysexts that
+# track the base version be downloaded in one pass.
+
+RT="$WORKDIR/resolve-target"
+rm -rf "$RT"
+mkdir -p "$RT/usr/lib" \
+         "$RT/etc/sysupdate.d" \
+         "$RT/etc/sysupdate.myext.d" \
+         "$RT/source" \
+         "$RT/target-base" \
+         "$RT/target-ext"
+
+printf 'IMAGE_VERSION=1\nIMAGE_ID=testimg\nID=test\n' >"$RT/usr/lib/os-release"
+
+# Create base source tarballs: each version's tarball contains usr/lib/os-release
+# with the matching IMAGE_VERSION so that context_load_target_os_release() can
+# read it from the installed directory target.
+for v in 1 2; do
+    mkdir -p "$RT/source/base-$v/usr/lib"
+    printf 'IMAGE_VERSION=%s\nIMAGE_ID=testimg\nID=test\n' "$v" \
+        >"$RT/source/base-$v/usr/lib/os-release"
+    echo "base-content-$v" >"$RT/source/base-$v/marker"
+    tar --numeric-owner -C "$RT/source/base-$v" -cf "$RT/source/base-$v.tar" .
+    rm -rf "$RT/source/base-$v"
+done
+
+# Component sources keyed by IMAGE_VERSION: ext-<IMAGE_VERSION>_<version>.bin
+for img_v in 1 2; do
+    echo "ext-for-imgver-$img_v" >"$RT/source/ext-${img_v}_1.bin"
+done
+
+(cd "$RT/source" && sha256sum -- *.tar *.bin >SHA256SUMS)
+
+# Base transfer: tar source -> directory target
+cat >"$RT/etc/sysupdate.d/01-base.transfer" <<EOF
+[Source]
+Type=tar
+Path=/source
+MatchPattern=base-@v.tar
+
+[Target]
+Type=directory
+Path=/target-base
+MatchPattern=base-@v
+InstancesMax=2
+EOF
+
+# Component transfer: ResolveFromTarget=yes makes %A resolve from the NEW base
+cat >"$RT/etc/sysupdate.myext.d/01-ext.transfer" <<EOF
+[Transfer]
+ResolveFromTarget=yes
+
+[Source]
+Type=regular-file
+Path=/source
+MatchPattern=ext-%A_@v.bin
+
+[Target]
+Type=regular-file
+Path=/target-ext
+MatchPattern=ext-%A_@v.bin
+InstancesMax=2
+EOF
+
+"$SYSUPDATE" --root="$RT" --component-all --verify=no update
+
+# Base should be updated to v2
+test -d "$RT/target-base/base-2"
+test -f "$RT/target-base/base-2/marker"
+
+# Component should have picked up sysext matching the NEW base version (2), not the old (1)
+test -f "$RT/target-ext/ext-2_1.bin"
+test ! -e "$RT/target-ext/ext-1_1.bin"
+
+rm -rf "$RT"
+
 touch /testok
