@@ -11,6 +11,7 @@
 #include "chase.h"
 #include "conf-parser.h"
 #include "dirent-util.h"
+#include "env-util.h"
 #include "errno-util.h"
 #include "event-util.h"
 #include "extract-word.h"
@@ -52,6 +53,47 @@
 enum {
         MATCH_PATTERN_SOURCE,
         MATCH_PATTERN_TARGET,
+};
+
+static int specifier_sysupdate_os_field(
+                char specifier,
+                const void *data,
+                const char *root,
+                const void *userdata,
+                char **ret) {
+
+        const Transfer *t = userdata;
+        const char *field = ASSERT_PTR(data);
+
+        if (t && t->resolve_from_target && t->context && t->context->target_os_release) {
+                const char *val = strv_env_get(t->context->target_os_release, field);
+                if (val)
+                        return strdup_to(ret, val);
+        }
+
+        _cleanup_free_ char *v = NULL;
+        int r = parse_os_release(root, field, &v);
+        if (r >= 0) {
+                *ret = TAKE_PTR(v);
+                return 0;
+        }
+
+        return r == -ENOENT ? -EUNATCH : r;
+}
+
+/* Like system_and_tmp_specifier_table, but os-release specifiers (%A, %B, %M, %o, %w, %W) are
+ * overridden to resolve from Context.target_os_release when the transfer has ResolveFromTarget=yes.
+ * The override entries shadow the corresponding entries in COMMON_SYSTEM_SPECIFIERS. */
+static const Specifier sysupdate_specifier_table[] = {
+        { 'A', specifier_sysupdate_os_field, "IMAGE_VERSION" },
+        { 'B', specifier_sysupdate_os_field, "BUILD_ID"      },
+        { 'M', specifier_sysupdate_os_field, "IMAGE_ID"      },
+        { 'o', specifier_sysupdate_os_field, "ID"            },
+        { 'w', specifier_sysupdate_os_field, "VERSION_ID"    },
+        { 'W', specifier_sysupdate_os_field, "VARIANT_ID"    },
+        COMMON_SYSTEM_SPECIFIERS,
+        COMMON_TMP_SPECIFIERS,
+        {}
 };
 
 Transfer* transfer_free(Transfer *t) {
@@ -139,7 +181,7 @@ static int config_parse_protect_version(
                 return 0;
         }
 
-        r = specifier_printf(rvalue, NAME_MAX, system_and_tmp_specifier_table, t->context->root, NULL, &resolved);
+        r = specifier_printf(rvalue, NAME_MAX, sysupdate_specifier_table, t->context->root, /* userdata= */ t, &resolved);
         if (r < 0) {
                 log_syntax(unit, LOG_WARNING, filename, line, r,
                            "Failed to expand specifiers in ProtectVersion=, ignoring: %s", rvalue);
@@ -183,7 +225,7 @@ static int config_parse_min_version(
                 return 0;
         }
 
-        r = specifier_printf(rvalue, NAME_MAX, system_and_tmp_specifier_table, t->context->root, NULL, &resolved);
+        r = specifier_printf(rvalue, NAME_MAX, sysupdate_specifier_table, t->context->root, /* userdata= */ t, &resolved);
         if (r < 0) {
                 log_syntax(unit, LOG_WARNING, filename, line, r,
                            "Failed to expand specifiers in MinVersion=, ignoring: %s", rvalue);
@@ -243,7 +285,7 @@ static int config_parse_current_symlink(
                 return 0;
         }
 
-        r = specifier_printf(rvalue, PATH_MAX-1, system_and_tmp_specifier_table, t->context->root, NULL, &resolved);
+        r = specifier_printf(rvalue, PATH_MAX-1, sysupdate_specifier_table, t->context->root, /* userdata= */ t, &resolved);
         if (r < 0) {
                 log_syntax(unit, LOG_WARNING, filename, line, r,
                            "Failed to expand specifiers in CurrentSymlink=, ignoring: %s", rvalue);
@@ -334,7 +376,7 @@ static int config_parse_resource_pattern(
                 if (r == 0)
                         break;
 
-                r = specifier_printf(word, NAME_MAX, system_and_tmp_specifier_table, t->context->root, NULL, &resolved);
+                r = specifier_printf(word, NAME_MAX, sysupdate_specifier_table, t->context->root, /* userdata= */ t, &resolved);
                 if (r < 0) {
                         log_syntax(unit, LOG_WARNING, filename, line, r,
                                    "Failed to expand specifiers in MatchPattern=, ignoring: %s", rvalue);
@@ -393,7 +435,7 @@ static int config_parse_resource_path(
                 return 0;
         }
 
-        r = specifier_printf(rvalue, PATH_MAX-1, system_and_tmp_specifier_table, t->context->root, NULL, &resolved);
+        r = specifier_printf(rvalue, PATH_MAX-1, sysupdate_specifier_table, t->context->root, /* userdata= */ t, &resolved);
         if (r < 0) {
                 log_syntax(unit, LOG_WARNING, filename, line, r,
                            "Failed to expand specifiers in Path=, ignoring: %s", rvalue);
@@ -551,6 +593,7 @@ int transfer_read_definition(Transfer *t, const char *path, const char **dirs, H
                 { "Transfer",    "AppStream",               config_parse_transfer_url_specifiers_many, 0,                    &t->appstream               },
                 { "Transfer",    "Features",                config_parse_strv,                         0,                    &t->features                },
                 { "Transfer",    "RequisiteFeatures",       config_parse_strv,                         0,                    &t->requisite_features      },
+                { "Transfer",    "ResolveFromTarget",       config_parse_bool,                         0,                    &t->resolve_from_target     },
                 { "Source",      "Type",                    config_parse_resource_type,                0,                    &t->source.type             },
                 { "Source",      "Path",                    config_parse_resource_path,                0,                    &t->source                  },
                 { "Source",      "PathRelativeTo",          config_parse_resource_path_relto,          0,                    &t->source.path_relative_to },

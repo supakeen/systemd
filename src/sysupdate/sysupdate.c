@@ -118,6 +118,8 @@ void context_done(Context *c) {
         c->update_sets = mfree(c->update_sets);
         c->n_update_sets = 0;
 
+        c->target_os_release = strv_free(c->target_os_release);
+
         c->web_cache = hashmap_free(c->web_cache);
 
         c->installdb_fd = safe_close(c->installdb_fd);
@@ -207,6 +209,10 @@ static int context_from_base_with_component(const Context *base, const char *com
         }
 
         if (strdup_to(&context.component, component) < 0)
+                return log_oom();
+
+        context.target_os_release = strv_copy(base->target_os_release);
+        if (base->target_os_release && !context.target_os_release)
                 return log_oom();
 
         /* NB: we do not copy .loop_device/.mounted_dir here, since that's for lifetime tracking only, and

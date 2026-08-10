@@ -18,6 +18,7 @@ typedef struct Transfer {
         char **features;
         char **requisite_features;
         bool enabled;
+        bool resolve_from_target;
 
         Resource source, target;
 

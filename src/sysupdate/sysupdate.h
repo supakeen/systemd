@@ -53,6 +53,8 @@ typedef struct Context {
 
         UpdateSet *newest_installed, *candidate;
 
+        char **target_os_release; /* os-release fields from the installed base target, if they differ from the host */
+
         Hashmap *web_cache; /* Cache for downloaded resources, keyed by URL */
 
         int installdb_fd;
