@@ -56,6 +56,7 @@
 #include "ptyfwd.h"
 #include "run-polkit.h"
 #include "runtime-scope.h"
+#include "selinux-util.h"
 #include "signal-util.h"
 #include "special.h"
 #include "string-table.h"
@@ -1094,6 +1095,19 @@ static int parse_argv_sudo_mode(int argc, char *argv[]) {
          * that here, since we're primarily invoked in interactive environments where this does matter. */
         if (strv_extend(&arg_property, "IgnoreSIGPIPE=no") < 0)
                 return log_oom();
+
+        if (arg_transport == BUS_TRANSPORT_LOCAL) {
+                _cleanup_free_ char *ctx = NULL;
+
+                r = mac_selinux_get_run0_context_for_user(arg_exec_user, &ctx);
+                if (r == -EOPNOTSUPP)
+                        log_debug("SELinux not enabled, not setting context.");
+                else if (r < 0)
+                        log_warning_errno(r, "Failed to compute SELinux context for user '%s', ignoring: %m",
+                                          arg_exec_user);
+                else if (strv_extendf(&arg_property, "SELinuxContext=%s", ctx) < 0)
+                        return log_oom();
+        }
 
         if (!arg_background && arg_stdio == ARG_STDIO_PTY) {
                 r = terminal_tint_color(shell_prompt_hue(), &arg_background);
