@@ -1105,8 +1105,11 @@ static int parse_argv_sudo_mode(int argc, char *argv[]) {
                 else if (r < 0)
                         log_warning_errno(r, "Failed to compute SELinux context for user '%s', ignoring: %m",
                                           arg_exec_user);
-                else if (strv_extendf(&arg_property, "SELinuxContext=%s", ctx) < 0)
-                        return log_oom();
+                else {
+                        log_debug("Computed SELinux context for user '%s': %s", arg_exec_user, ctx);
+                        if (strv_extendf(&arg_property, "SELinuxContext=%s", ctx) < 0)
+                                return log_oom();
+                }
         }
 
         if (!arg_background && arg_stdio == ARG_STDIO_PTY) {
