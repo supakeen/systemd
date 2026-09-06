@@ -14,6 +14,7 @@
 
 #include <selinux/avc.h>
 #include <selinux/context.h>
+#include <selinux/get_context_list.h>
 #include <selinux/label.h>
 #include <selinux/selinux.h>
 
@@ -86,14 +87,18 @@ DLSYM_PROTOTYPE(context_new) = NULL;
 DLSYM_PROTOTYPE(context_range_get) = NULL;
 DLSYM_PROTOTYPE(context_range_set) = NULL;
 DLSYM_PROTOTYPE(context_str) = NULL;
+DLSYM_PROTOTYPE(context_type_set) = NULL;
 DLSYM_PROTOTYPE(fgetfilecon_raw) = NULL;
 DLSYM_PROTOTYPE(fini_selinuxmnt) = NULL;
 DLSYM_PROTOTYPE(freecon) = NULL;
+DLSYM_PROTOTYPE(get_default_context_with_level) = NULL;
 DLSYM_PROTOTYPE(getcon_raw) = NULL;
 DLSYM_PROTOTYPE(getfilecon_raw) = NULL;
 DLSYM_PROTOTYPE(getpeercon_raw) = NULL;
 DLSYM_PROTOTYPE(getpidcon_raw) = NULL;
+DLSYM_PROTOTYPE(getseuserbyname) = NULL;
 DLSYM_PROTOTYPE(is_selinux_enabled) = NULL;
+DLSYM_PROTOTYPE(security_check_context_raw) = NULL;
 DLSYM_PROTOTYPE(security_compute_create_raw) = NULL;
 DLSYM_PROTOTYPE(security_getenforce) = NULL;
 DLSYM_PROTOTYPE(selabel_close) = NULL;
@@ -134,14 +139,18 @@ int dlopen_libselinux(int log_level) {
                         DLSYM_ARG(context_range_get),
                         DLSYM_ARG(context_range_set),
                         DLSYM_ARG(context_str),
+                        DLSYM_ARG(context_type_set),
                         DLSYM_ARG(fgetfilecon_raw),
                         DLSYM_ARG(fini_selinuxmnt),
                         DLSYM_ARG(freecon),
+                        DLSYM_ARG(get_default_context_with_level),
                         DLSYM_ARG(getcon_raw),
                         DLSYM_ARG(getfilecon_raw),
                         DLSYM_ARG(getpeercon_raw),
                         DLSYM_ARG(getpidcon_raw),
+                        DLSYM_ARG(getseuserbyname),
                         DLSYM_ARG(is_selinux_enabled),
+                        DLSYM_ARG(security_check_context_raw),
                         DLSYM_ARG(security_compute_create_raw),
                         DLSYM_ARG(security_getenforce),
                         DLSYM_ARG(selabel_close),
@@ -733,6 +742,55 @@ int mac_selinux_get_child_mls_label(int socket_fd, const char *exe, const char *
                 return -ENOSYS;
 
         return RET_NERRNO(sym_security_compute_create_raw(bcon_str, fcon, sclass, ret_label));
+#else
+        return -EOPNOTSUPP;
+#endif
+}
+
+int mac_selinux_get_run0_context_for_user(const char *user, char **ret_label) {
+        assert(user);
+        assert(ret_label);
+
+#if HAVE_SELINUX
+        _cleanup_freecon_ char *mycon = NULL, *newcon = NULL;
+        _cleanup_free_ char *seuser = NULL, *level = NULL;
+        _cleanup_(context_freep) context_t ctx = NULL;
+        const char *result;
+
+        if (!mac_selinux_use())
+                return -EOPNOTSUPP;
+
+        if (sym_getcon_raw(&mycon) < 0)
+                return -errno;
+        if (!mycon)
+                return -EOPNOTSUPP;
+
+        if (sym_getseuserbyname(user, &seuser, &level) < 0)
+                return -errno;
+
+        if (sym_get_default_context_with_level(seuser, level, mycon, &newcon) < 0)
+                return -errno;
+
+        ctx = sym_context_new(newcon);
+        if (!ctx)
+                return -ENOMEM;
+
+        if (sym_context_type_set(ctx, "run0_service_t") != 0)
+                return -errno;
+
+        result = sym_context_str(ctx);
+        if (!result)
+                return -ENOMEM;
+
+        if (sym_security_check_context_raw(result) < 0)
+                return -EINVAL;
+
+        char *label = strdup(result);
+        if (!label)
+                return -ENOMEM;
+
+        *ret_label = label;
+        return 0;
 #else
         return -EOPNOTSUPP;
 #endif

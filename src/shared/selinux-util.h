@@ -14,6 +14,7 @@
 #include <selinux/avc.h>
 #include <selinux/label.h>
 #include <selinux/context.h>
+#include <selinux/get_context_list.h>
 #include <selinux/selinux.h> /* IWYU pragma: export */
 
 #include "dlfcn-util.h"
@@ -24,13 +25,16 @@ extern DLSYM_PROTOTYPE(context_new);
 extern DLSYM_PROTOTYPE(context_range_get);
 extern DLSYM_PROTOTYPE(context_range_set);
 extern DLSYM_PROTOTYPE(context_str);
+extern DLSYM_PROTOTYPE(context_type_set);
 extern DLSYM_PROTOTYPE(fgetfilecon_raw);
 extern DLSYM_PROTOTYPE(fini_selinuxmnt);
 extern DLSYM_PROTOTYPE(freecon);
+extern DLSYM_PROTOTYPE(get_default_context_with_level);
 extern DLSYM_PROTOTYPE(getcon_raw);
 extern DLSYM_PROTOTYPE(getfilecon_raw);
 extern DLSYM_PROTOTYPE(getpeercon_raw);
 extern DLSYM_PROTOTYPE(getpidcon_raw);
+extern DLSYM_PROTOTYPE(getseuserbyname);
 extern DLSYM_PROTOTYPE(is_selinux_enabled);
 extern DLSYM_PROTOTYPE(security_compute_create_raw);
 extern DLSYM_PROTOTYPE(security_getenforce);
@@ -104,6 +108,7 @@ int mac_selinux_get_create_label_from_exe(const char *exe, char **ret_label);
 int mac_selinux_get_our_label(char **ret_label);
 int mac_selinux_get_peer_label(int socket_fd, char **ret_label);
 int mac_selinux_get_child_mls_label(int socket_fd, const char *exe, const char *exec_label, char **ret_label);
+int mac_selinux_get_run0_context_for_user(const char *user, char **ret_label);
 
 int mac_selinux_create_file_prepare_at(int dir_fd, const char *path, mode_t mode, LabelContext *label_context);
 static inline int mac_selinux_create_file_prepare(const char *path, mode_t mode, LabelContext *label_context) {
