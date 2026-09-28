@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+#
+# File contexts for systemd-selinux-exec
+
+/usr/lib/systemd/systemd-selinux-exec    --    system_u:object_r:systemd_selinux_exec_exec_t:s0

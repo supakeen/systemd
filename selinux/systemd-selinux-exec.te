@@ -1,0 +1,87 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+#
+# SELinux policy module for systemd-selinux-exec, the transition helper
+# that allows run0 to execute commands under the caller's SELinux domain
+# without entrypoint denials on special binary types.
+#
+# Build and load:
+#   make -f /usr/share/selinux/devel/Makefile systemd-selinux-exec.pp
+#   sudo semodule -i systemd-selinux-exec.pp
+#
+# Unload:
+#   sudo semodule -r systemd-selinux-exec
+#
+# Requires: selinux-policy-devel
+
+policy_module(systemd-selinux-exec, 1.0)
+
+gen_require(`
+    attribute exec_type;
+    type unconfined_t;
+    type unconfined_service_t;
+    type init_t;
+    role unconfined_r;
+')
+
+# --------------------------------------------------------------------------
+# File type for the helper binary
+# --------------------------------------------------------------------------
+
+type systemd_selinux_exec_exec_t;
+files_type(systemd_selinux_exec_exec_t)
+typeattribute systemd_selinux_exec_exec_t exec_type;
+
+# --------------------------------------------------------------------------
+# Executor permissions: unconfined_service_t must be able to run the helper
+# --------------------------------------------------------------------------
+
+allow unconfined_service_t systemd_selinux_exec_exec_t:file
+    { execute read open getattr map };
+
+# Allow the transitions from the executor into caller domains via setexeccon.
+# unconfined_service_t -> unconfined_t is typically already allowed, but be
+# explicit so nobody misses it
+allow unconfined_service_t unconfined_t:process transition;
+allow init_t unconfined_t:process transition;
+
+# --------------------------------------------------------------------------
+# Entrypoint rules: one per caller domain that should be able to use run0
+# --------------------------------------------------------------------------
+
+# Unconfined callers (the common case and the one reported in rh#2359828)
+allow unconfined_t systemd_selinux_exec_exec_t:file
+    { entrypoint read execute getattr map };
+
+role unconfined_r types unconfined_t;
+
+# --------------------------------------------------------------------------
+# Confined callers: staff_t via staff_run0_t intermediary domain
+#
+# Similar to sudo's staff_sudo_t: provides a distinct domain for
+# policy-based command transitions when confined users invoke run0.
+#
+# Distribution policy should grant staff_run0_t the same command transition
+# rules as staff_sudo_t. For sudo, sudo_role_template() pulls in interfaces
+# like rpm_run(), modutils_domtrans(), mount_run(), etc. The example below
+# shows rpm_run() as a an example; add the others as needed.
+# --------------------------------------------------------------------------
+
+optional_policy(`
+    gen_require(`
+        type staff_t;
+        role staff_r;
+    ')
+
+    type staff_run0_t;
+    role staff_r types staff_run0_t;
+
+    type_transition staff_t systemd_selinux_exec_exec_t:process staff_run0_t;
+
+    allow unconfined_service_t staff_run0_t:process transition;
+    allow staff_run0_t systemd_selinux_exec_exec_t:file
+        { entrypoint read execute getattr map };
+
+    optional_policy(`
+        rpm_run(staff_run0_t, staff_r)
+    ')
+')

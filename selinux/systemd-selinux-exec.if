@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Policy interfaces for systemd-selinux-exec
+
+interface(`systemd_selinux_exec_domtrans',`
+        gen_require(`
+                type systemd_selinux_exec_exec_t;
+                type unconfined_service_t;
+        ')
+        role $3 types $2;
+        type_transition $1 systemd_selinux_exec_exec_t:process $2;
+        allow unconfined_service_t $2:process transition;
+        allow $2 systemd_selinux_exec_exec_t:file
+                { entrypoint read execute getattr map };
+')
