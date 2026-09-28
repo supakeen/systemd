@@ -5,6 +5,9 @@ executables += [
                 'name' : 'systemd-run',
                 'public' : true,
                 'sources' : files('run.c', 'run-polkit.c'),
+                'dependencies' : [
+                        libselinux_cflags,
+                ],
         },
 ]
 
